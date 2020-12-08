@@ -1,0 +1,6 @@
+{
+    "require": {
+        "ddeboer/imap": "^1.11",
+        "phpmailer/phpmailer": "^6.2"
+    }
+}
