@@ -1,10 +1,8 @@
 <?php
 
 /*
-    Following file is in pretty bad test phase
     - Remaining work:
         - Code cleaning
-        - Maintaining Failure Logs
 */
 
 require 'vendor/autoload.php';
@@ -47,7 +45,7 @@ $mail->addAddress("test@testing.com");
 $db = new DB();
 $db->connect();
 
-$ep = new EmailParser();
+$ep = new EmailParser($db);
 
 $server = new Server(SERVER, PORT);
 $connection = $server->authenticate(MAIL_USER, MAIL_PASSWORD);
@@ -55,70 +53,80 @@ $mailbox = $connection->getMailbox('INBOX');
 $messages = $mailbox->getMessages();
 
 foreach ($messages as $message) {
-    
     if (!$message->isSeen()) {
         $is_valid = false;
+
         // validating the message
         $from = trim($message->getFrom()->getAddress());
         $type = $ep->get_type($from);
         if ($type) {
-            if ($ep->validate_type_by_body($message->getBodyText(), $type)) {
+            if ($type === 1) {
+                $content_body = $message->getBodyText();
+            } else
+            if ($type === 2) {
+                $content_body = $message->getBodyHtml();
+            } else
+            if ($type === 3) {
+                $content_body = $message->getBodyHtml();
+            }
+            if ($ep->validate_type_by_body($content_body, $type)) {
                 $is_valid = true;
             }
         }
 
         if ($is_valid) {
             if ($type === 1) {
-                $body = trim($message->getBodyText());
+                $body = trim($content_body);
                 $data = $ep->two_talk_data($body);
                 if ($data && !empty($data)) {
                     $check = $db->insert_email($data['name'], $data['description'], $data['dateadded'], $data['email'], true);
                     if ($check && is_array($check)) {
                         $attachments = $message->getAttachments();
                         foreach ($attachments as $attachment) {
+                            file_put_contents(__DIR__.'/attachments/'. $attachment->getFilename(), $attachment->getDecodedContent());
                             $file_name = $attachment->getFilename();
                             $file_check = $db->insert_file($check[1], $file_name, $data['dateadded']);
-                            // may be storing attachment files in certain directory?
                             if ($file_check) {
                                 $ep->send_notification($mail);
                             } else {
-                                // @todo: log error
+                                $db->store_log('Failed to save file data in database: '.trim($message->getSubject()));
                             }
                         }
                     } else {
-                        // @todo: log error
+                        $db->store_log('Failed to store in database: '.trim($message->getSubject()));
                     }
                 }
             } else if ($type === 2) {
                 $subject = trim($message->getSubject());
-                $body = trim($message->getBodyText());
+                $body = trim($content_body);
                 $data = $ep->trade_me_data($subject, $body);
                 if ($data && !empty($data)) {
                     $check = $db->insert_email($data['name'], $data['description'], $data['dateadded'], $data['email']);
                     if ($check) {
                         $ep->send_notification($mail);
                     } else {
-                        // @todo: log error
+                        $db->store_log('Failed to store in database: '.trim($message->getSubject()));
                     }
                 }
             } else if ($type === 3) {
                 $subject = trim($message->getSubject());
-                $body = trim($message->getBodyText());
+                $body = trim($content_body);
                 $data = $ep->car_buyer_data($subject, $body);
                 if ($data && !empty($data)) {
                     $check = $db->insert_email($data['name'], $data['description'], $data['dateadded'], $data['email']);
                     if ($check) {
                         $ep->send_notification($mail);
                     } else {
-                        // @todo: log error
+                        $db->store_log('Failed to store in database: '.trim($message->getSubject()));
                     }
                 }
             }
         }
-        $message->markAsSeen();
-        // maybe delete the mail after reading? may be
+        $message->delete();
     }
 }
+// closing connection 
+$connection->expunge();
 
 // oh God 
 
@@ -126,8 +134,10 @@ class EmailParser {
     private $Twotalk;
     private $Trademe;
     private $CarBuyer;
+    private $db;
     
-    public function __construct() {
+    public function __construct($db) {
+        $this->db = $db;
         $this->Twotalk = "2talk.co.nz";
         $this->Trademe = "trademe.co.nz";
         $this->CarBuyer = "carbuyers.co.nz";
@@ -233,6 +243,7 @@ class EmailParser {
             if (PROJECT_MODE === 'development') {
                 $error .= " {$mail->ErrorInfo}";
             }
+            $this->db->store_log($error);
         }
     }
 
@@ -312,4 +323,11 @@ class DB
         return false;
     }
     
+    public function store_log ($body)
+    {
+        $f = fopen(__DIR__.'/logs/failure.log', "a") or die("hey dummy. Sorry, can't even log failure :(");
+        $d = $body."\n";
+        fwrite($f, $d);
+        fclose($f);
+    }
 }
